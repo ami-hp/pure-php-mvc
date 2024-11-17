@@ -1,0 +1,25 @@
+{
+    "name": "ami-hp/php-mvc",
+    "description": "A Basic MVC PHP Website",
+    "type": "project",
+    "require": {
+        "ext-json": "*",
+        "ext-pdo": "*",
+        "ext-curl": "*"
+    },
+    "license": "MIT",
+    "autoload": {
+        "psr-4": {
+            "AmiHp\\PhpMvc\\": "app/"
+        },
+        "files": [
+            "app/Core/Utils/helpers.php"
+        ]
+    },
+    "authors": [
+        {
+            "name": "Ahmadreza Nozaeem",
+            "email": "aminz.uiux@gmail.com"
+        }
+    ]
+}
