@@ -10,7 +10,6 @@
     "license": "MIT",
     "autoload": {
         "psr-4": {
-            "AmiHp\\PhpMvc\\": "app/"
         },
         "files": [
             "app/Core/Utils/helpers.php"
