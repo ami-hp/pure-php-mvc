@@ -32,7 +32,7 @@ class MysqlQueryBuilder
     protected false|int $limit = false;
     protected false|int $offset = false;
     protected bool $distinct = false;
-    protected bool $sql = false;
+    protected bool $toSqlStatus = false;
 
     protected string $action = "select";
 
@@ -41,61 +41,104 @@ class MysqlQueryBuilder
         $this->connection = Mysql::getInstance();
     }
 
-    public function table($table): self
+    public function table($table): static
     {
         $this->table = $table;
         return $this;
     }
 
-    public function select($columns = ['*']): self
+    public function select($columns = ['*']): static
     {
         $this->selects = is_array($columns) ? $columns : func_get_args();
         return $this;
     }
 
-    public function where($column, $operator, $value): self
+    public function where($column, $operator, $value): static
     {
         $this->wheres[] = "{$column} {$operator} ?";
         $this->bindings[] = $value;
         return $this;
     }
 
-    public function groupBy($columns)
+    public function groupBy($columns): static
     {
         $this->groupBys = is_array($columns) ? $columns : explode(', ', $columns);
         return $this;
     }
 
-    public function limit($limit): self
+    public function limit($limit): static
     {
         $this->limit = $limit;
         return $this;
     }
 
-    public function offset($offset): self
+    public function offset($offset): static
     {
         $this->offset = $offset;
         return $this;
     }
 
-    public function unique($column): self
+    public function unique($column): static
     {
         $this->selects = ["DISTINCT {$column}"];
         return $this;
     }
 
-    public function toSql(bool $state = true): self
+    public function toSql(bool $state = true): static
     {
 
-        $this->sql = $state;
+        $this->toSqlStatus = $state;
 
         return $this;
     }
 
-    protected function setAction(string $action)
+    protected function setAction(string $action): static
     {
         $this->action = $action;
         return $this;
+    }
+
+    private function buildSelect(): array
+    {
+        $sql = ["SELECT"];
+        if ($this->distinct) {
+            $sql[] = "DISTINCT";
+        }
+        $sql[] = empty($this->selects) ? "*" : implode(', ', $this->selects);
+        $sql[] = "FROM {$this->table}";
+        return $sql;
+    }
+
+    private function buildWhere(): array
+    {
+        if ($this->wheres) {
+            return ["WHERE ".implode(' AND ', $this->wheres)];
+        }
+        return [];
+    }
+
+    private function buildGroupBy(): array
+    {
+        if ($this->groupBys) {
+            return ["GROUP BY ".implode(', ', $this->groupBys)];
+        }
+        return [];
+    }
+
+    private function buildLimit(): array
+    {
+        if ($this->limit) {
+            return ["LIMIT {$this->limit}"];
+        }
+        return [];
+    }
+
+    private function buildOffset(): array
+    {
+        if ($this->offset) {
+            return ["OFFSET {$this->offset}"];
+        }
+        return [];
     }
 
     public function buildSql(): string
@@ -104,27 +147,13 @@ class MysqlQueryBuilder
 
         switch ($this->action) {
             case 'select':
-                $sql[] = "SELECT";
-
-                if($this->distinct) $sql[] = 'DISTINCT';
-
-                $sql[] = empty($this->selects)
-                            ? "*"
-                            : implode(', ', $this->selects);
-                $sql[] = "FROM {$this->table}";
-
-                if ($this->wheres) {
-                    $sql[] = "WHERE ".implode(' AND ', $this->wheres);
-                }
-                if ($this->groupBys) {
-                    $sql[] = "GROUP BY ".implode(', ', $this->groupBys);
-                }
-                if ($this->limit) {
-                    $sql[] = "LIMIT {$this->limit}";
-                }
-                if ($this->offset) {
-                    $sql[] = " OFFSET {$this->offset}";
-                }
+                $sql = array_merge(
+                    $this->buildSelect(),
+                    $this->buildWhere(),
+                    $this->buildGroupBy(),
+                    $this->buildLimit(),
+                    $this->buildOffset()
+                );
                 break;
             case 'insert':
                 break;
@@ -135,17 +164,17 @@ class MysqlQueryBuilder
             default:
                 break;
         }
-        return implode(' ' , $sql);
+        return implode(' ', $sql);
     }
 
     public function get()
     {
-
         $sql = $this->setAction('select')->buildSql();
 
-        if ($this->sql) {
+        if ($this->toSqlStatus) {
             return $sql;
         }
+
         $stmt = $this->connection->prepare($sql);
         $stmt->execute($this->bindings);
         return $stmt->fetchAll(PDO::FETCH_ASSOC);

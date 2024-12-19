@@ -8,7 +8,7 @@ use PDO;
 class Model extends MysqlQueryBuilder
 {
     protected string $table;
-    public $primaryKey = 'id';
+    public string $primaryKey = 'id';
 
     public function __construct()
     {
