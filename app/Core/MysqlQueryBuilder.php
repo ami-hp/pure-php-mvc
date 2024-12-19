@@ -4,6 +4,7 @@ namespace App\Core;
 
 use App\Core\Mysql;
 use PDO;
+use PDOException;
 
 // using Data Mapper, Behavioral Design Pattern
 
@@ -36,6 +37,13 @@ class MysqlQueryBuilder
 
     protected string $action = "select";
 
+
+    private array $columns = [];
+    private array $values = [];
+
+    private array $update = [];
+    private bool $ignore = false;
+
     public function __construct()
     {
         $this->connection = Mysql::getInstance();
@@ -47,12 +55,6 @@ class MysqlQueryBuilder
         return $this;
     }
 
-    public function select($columns = ['*']): static
-    {
-        $this->selects = is_array($columns) ? $columns : func_get_args();
-        return $this;
-    }
-
     public function where($column, $operator, $value): static
     {
         $this->wheres[] = "{$column} {$operator} ?";
@@ -60,29 +62,6 @@ class MysqlQueryBuilder
         return $this;
     }
 
-    public function groupBy($columns): static
-    {
-        $this->groupBys = is_array($columns) ? $columns : explode(', ', $columns);
-        return $this;
-    }
-
-    public function limit($limit): static
-    {
-        $this->limit = $limit;
-        return $this;
-    }
-
-    public function offset($offset): static
-    {
-        $this->offset = $offset;
-        return $this;
-    }
-
-    public function unique($column): static
-    {
-        $this->selects = ["DISTINCT {$column}"];
-        return $this;
-    }
 
     public function toSql(bool $state = true): static
     {
@@ -92,54 +71,6 @@ class MysqlQueryBuilder
         return $this;
     }
 
-    protected function setAction(string $action): static
-    {
-        $this->action = $action;
-        return $this;
-    }
-
-    private function buildSelect(): array
-    {
-        $sql = ["SELECT"];
-        if ($this->distinct) {
-            $sql[] = "DISTINCT";
-        }
-        $sql[] = empty($this->selects) ? "*" : implode(', ', $this->selects);
-        $sql[] = "FROM {$this->table}";
-        return $sql;
-    }
-
-    private function buildWhere(): array
-    {
-        if ($this->wheres) {
-            return ["WHERE ".implode(' AND ', $this->wheres)];
-        }
-        return [];
-    }
-
-    private function buildGroupBy(): array
-    {
-        if ($this->groupBys) {
-            return ["GROUP BY ".implode(', ', $this->groupBys)];
-        }
-        return [];
-    }
-
-    private function buildLimit(): array
-    {
-        if ($this->limit) {
-            return ["LIMIT {$this->limit}"];
-        }
-        return [];
-    }
-
-    private function buildOffset(): array
-    {
-        if ($this->offset) {
-            return ["OFFSET {$this->offset}"];
-        }
-        return [];
-    }
 
     public function buildSql(): string
     {
@@ -156,6 +87,11 @@ class MysqlQueryBuilder
                 );
                 break;
             case 'insert':
+                $sql = array_merge(
+                    [$this->buildInsertBase()],
+                    [$this->buildValues()],
+                    [$this->buildOnDuplicateKeyUpdate()]
+                );
                 break;
             case 'update':
                 break;
@@ -208,12 +144,27 @@ class MysqlQueryBuilder
         return $stmt->fetch(PDO::FETCH_ASSOC)['count'];
     }
 
-    public function create($data)
+    public function insert()
     {
-        $keys = implode(',', array_keys($data));
-        $placeholders = ':'.implode(',:', array_keys($data));
-        $stmt = $this->connection->prepare("INSERT INTO {$this->table} ({$keys}) VALUES ({$placeholders})");
-        return $stmt->execute($data);
+        $sql = $this->setAction('insert')->buildSql();
+        $stmt = $this->connection->prepare($sql);
+        // Binding values
+        foreach ($this->values as $i => $valueSet) {
+            foreach ($valueSet as $j => $value) {
+                $stmt->bindValue(":val_{$i}_{$j}", $value);
+            }
+        }
+        // Binding update values if present
+        foreach ($this->update as $column => $value) {
+            $stmt->bindValue(":update_$column", $value);
+        }
+        try {
+            $stmt->execute();
+            return true;
+        } catch (PDOException $e) {
+            echo "Error: ".$e->getMessage();
+            return false;
+        }
     }
 
     public function update($data)
@@ -244,4 +195,179 @@ class MysqlQueryBuilder
 
     // Additional methods for other SQL parts like joins, order by, group by, etc., can be added similarly
 
+    /**
+     * SELECT Methods
+     * ----------
+     */
+
+    public function select($columns = ['*']): static
+    {
+        $this->selects = is_array($columns) ? $columns : func_get_args();
+        return $this;
+    }
+
+    public function groupBy($columns): static
+    {
+        $this->groupBys = is_array($columns) ? $columns : explode(', ', $columns);
+        return $this;
+    }
+
+    public function limit($limit): static
+    {
+        $this->limit = $limit;
+        return $this;
+    }
+
+    public function offset($offset): static
+    {
+        $this->offset = $offset;
+        return $this;
+    }
+
+    public function unique($column): static
+    {
+        $this->selects = ["DISTINCT {$column}"];
+        return $this;
+    }
+
+    /**
+     * Insert Methods
+     * ----------
+     */
+    public function columns(array $columns): static
+    {
+        $this->columns = $columns;
+        return $this;
+    }
+
+    public function values(...$valuesSets): static
+    {
+        foreach ($valuesSets as $values) {
+            $this->values[] = $values;
+        }
+        return $this;
+    }
+
+    public function insertIgnore(): static
+    {
+        $this->ignore = true;
+        return $this;
+    }
+
+    private function buildInsertBase()
+    {
+        return $this->ignore
+            ? "INSERT IGNORE INTO {$this->table} (".implode(', ', $this->columns).") "
+            : "INSERT INTO {$this->table} (".implode(', ', $this->columns).") ";
+    }
+
+    private function buildValues()
+    {
+        $valuesParts = [];
+        $placeholders = [];
+        foreach ($this->values as $i => $valueSet) {
+            $rowPlaceholders = [];
+            foreach ($valueSet as $j => $value) {
+                $placeholder = ":val_{$i}_{$j}";
+                $rowPlaceholders[] = $placeholder;
+                $placeholders[$placeholder] = $value;
+            }
+            $valuesParts[] = "(".implode(', ', $rowPlaceholders).")";
+        }
+        return "VALUES ".implode(', ', $valuesParts);
+    }
+
+    private function buildOnDuplicateKeyUpdate()
+    {
+        if (!empty($this->update)) {
+            $updateParts = [];
+            foreach ($this->update as $column => $value) {
+                $updateParts[] = "$column = :update_$column";
+            }
+            return " ON DUPLICATE KEY UPDATE ".implode(', ', $updateParts);
+        }
+        return "";
+    }
+
+    private function quoteValue($value)
+    {
+        // This is a simple example, in real applications you should use prepared statements
+        return is_numeric($value) ? $value : "'".addslashes($value)."'";
+    }
+
+    /**
+     * example: onDuplicateKeyUpdate(['email' => 'eve_new@example.com'])
+     * @param  array  $update
+     * @return $this
+     */
+    public
+    function onDuplicateKeyUpdate(
+        array $update
+    ): static {
+        $this->update = $update;
+        return $this;
+    }
+
+
+    /**
+     * PRIVATE METHODS
+     * ============
+     * only used in this class
+     */
+
+    protected
+    function setAction(
+        string $action
+    ): static {
+        $this->action = $action;
+        return $this;
+    }
+
+    private
+    function buildSelect(): array
+    {
+        $sql = ["SELECT"];
+        if ($this->distinct) {
+            $sql[] = "DISTINCT";
+        }
+        $sql[] = empty($this->selects) ? "*" : implode(', ', $this->selects);
+        $sql[] = "FROM {$this->table}";
+        return $sql;
+    }
+
+    private
+    function buildWhere(): array
+    {
+        if ($this->wheres) {
+            return ["WHERE ".implode(' AND ', $this->wheres)];
+        }
+        return [];
+    }
+
+    private
+    function buildGroupBy(): array
+    {
+        if ($this->groupBys) {
+            return ["GROUP BY ".implode(', ', $this->groupBys)];
+        }
+        return [];
+    }
+
+    private
+    function buildLimit(): array
+    {
+        if ($this->limit) {
+            return ["LIMIT {$this->limit}"];
+        }
+        return [];
+    }
+
+    private
+    function buildOffset(): array
+    {
+        if ($this->offset) {
+            return ["OFFSET {$this->offset}"];
+        }
+        return [];
+    }
 }

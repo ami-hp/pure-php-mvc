@@ -10,12 +10,16 @@ class HomeController extends Controller
     public function index()
     {
         $userModel = new User();
+
+        $insert = $userModel
+            ->insertIgnore()
+            ->columns(['name' , 'username', 'password'])
+            ->values(['ami'.rand(1,51) , 'ami_hp'.rand(1,51) , '123456'])
+            ->insert();
+        vamp($insert);
+
         $users = $userModel
-            ->limit(1)
-            ->groupBy('username')
-            ->where('id' , '=' , '1')
             ->select(['username' , 'password'])
-            ->limit(1)
             ->get();
 
         vamp($users);
