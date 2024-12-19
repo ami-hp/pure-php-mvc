@@ -2,7 +2,7 @@
 
 namespace App\Core;
 
-class Database extends \PDO
+class Mysql extends \PDO
 {
     use \App\Core\Singleton;
 

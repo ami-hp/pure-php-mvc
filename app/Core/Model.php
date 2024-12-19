@@ -2,30 +2,32 @@
 
 namespace App\Core;
 
-use App\Core\Database;
+use App\Core\Mysql;
 use PDO;
 
-class Model
+class Model extends MysqlQueryBuilder
 {
-    protected $table;
-    protected $primaryKey = 'id';
-    private $db;
+    protected string $table;
+    public $primaryKey = 'id';
 
     public function __construct()
     {
-        $this->db = Database::getInstance();
+        parent::__construct();
     }
 
-    public function find($value)
+
+    public function setPrimaryKey(string $primaryKey) : void
     {
-        $stmt = $this->db->prepare("SELECT * FROM {$this->table} WHERE {$this->primaryKey} = :{$this->primaryKey}");
-        $stmt->execute([($this->primaryKey ?? "id") => $value]);
-        return $stmt->fetch(PDO::FETCH_ASSOC);
+        $this->primaryKey = $primaryKey;
     }
 
-    public function all()
+    public function query(): MysqlQueryBuilder
     {
-        $stmt = $this->db->query("SELECT * FROM {$this->table}");
-        return $stmt->fetchAll(PDO::FETCH_ASSOC);
+        return (new MysqlQueryBuilder())->table($this->table);
     }
+
+
+
+
+
 }
