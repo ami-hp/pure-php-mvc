@@ -29,6 +29,7 @@ class MysqlQueryBuilder
     protected array $wheres = [];
     protected array $bindings = [];
     protected array $groupBys = [];
+    protected array $orderBys = [];
     protected false|int $limit = false;
     protected false|int $offset = false;
     protected bool $distinct = false;
@@ -62,15 +63,11 @@ class MysqlQueryBuilder
         return $this;
     }
 
-
     public function toSql(bool $state = true): static
     {
-
         $this->toSqlStatus = $state;
-
         return $this;
     }
-
 
     public function buildSql(): string
     {
@@ -82,6 +79,7 @@ class MysqlQueryBuilder
                     $this->buildSelect(),
                     $this->buildWhere(),
                     $this->buildGroupBy(),
+                    $this->buildOrderBy(),
                     $this->buildLimit(),
                     $this->buildOffset()
                 );
@@ -99,7 +97,7 @@ class MysqlQueryBuilder
         return implode(' ', $sql);
     }
 
-    public function get()
+    public function get(): false|array|string
     {
         $sql = $this->setAction('select')->buildSql();
 
@@ -115,8 +113,12 @@ class MysqlQueryBuilder
     public function first()
     {
         $this->limit(1);
+        $sql = $this->setAction('select')->buildSql();
 
-        $sql = $this->toSql();
+        if ($this->toSqlStatus) {
+            return $sql;
+        }
+
         $stmt = $this->connection->prepare($sql);
         $stmt->execute($this->bindings);
         return $stmt->fetch(PDO::FETCH_ASSOC);
@@ -149,7 +151,8 @@ class MysqlQueryBuilder
             foreach ($valueSet as $j => $value) {
                 $stmt->bindValue(":val_{$i}_{$j}", $value);
             }
-            if($duplication = $this->insertUpdateOnDuplicate[$i]){
+
+            if (!empty($this->insertUpdateOnDuplicate) && $duplication = $this->insertUpdateOnDuplicate[$i]) {
                 foreach ($duplication as $column => $value) {
                     $stmt->bindValue(":update_{$i}_$column", $value);
                 }
@@ -210,6 +213,12 @@ class MysqlQueryBuilder
         return $this;
     }
 
+    public function orderBy(array $orders): static
+    {
+        $this->orderBys = $orders;
+        return $this;
+    }
+
     public function limit($limit): static
     {
         $this->limit = $limit;
@@ -239,6 +248,12 @@ class MysqlQueryBuilder
         return $this;
     }
 
+    public function onDuplicateKeyUpdate(array|null ...$duplicateOn): static
+    {
+        $this->insertUpdateOnDuplicate = $duplicateOn;
+        return $this;
+    }
+
     private function buildInsertBase(): string
     {
         $sql[] = "INSERT";
@@ -255,7 +270,7 @@ class MysqlQueryBuilder
         return "(".implode(',', array_keys($valueSet)).")";
     }
 
-    private function buildInsertValues($i , $valueSet): string
+    private function buildInsertValues($i, $valueSet): string
     {
         $placeholders = [];
 
@@ -276,9 +291,9 @@ class MysqlQueryBuilder
 
             $sql[] = $this->buildInsertColumns($valueSet);
 
-            $sql[] = $this->buildInsertValues($i , $valueSet);
+            $sql[] = $this->buildInsertValues($i, $valueSet);
 
-            if($duplicate = $this->buildOnDuplicateKeyUpdate($i)){
+            if ($duplicate = $this->buildOnDuplicateKeyUpdate($i)) {
                 $sql[] = $duplicate;
             }
 
@@ -300,25 +315,14 @@ class MysqlQueryBuilder
         return null;
     }
 
-    private function quoteValue($value)
-    {
-        // This is a simple example, in real applications you should use prepared statements
-        return is_numeric($value) ? $value : "'".addslashes($value)."'";
-    }
-
-    public function onDuplicateKeyUpdate(array|null ...$duplicateOn): static {
-        $this->insertUpdateOnDuplicate = $duplicateOn;
-        return $this;
-    }
-
-
     /**
      * PRIVATE METHODS
      * ============
      * only used in this class
      */
 
-    private function setAction(string $action): static {
+    private function setAction(string $action): static
+    {
         $this->action = $action;
         return $this;
     }
@@ -346,6 +350,18 @@ class MysqlQueryBuilder
     {
         if ($this->groupBys) {
             return ["GROUP BY ".implode(', ', $this->groupBys)];
+        }
+        return [];
+    }
+
+    private function buildOrderBy(): array
+    {
+        $sql = [];
+        if ($this->orderBys) {
+            foreach ($this->orderBys as $column => $direction) {
+                $sql[] = "{$column} ".strtoupper($direction);
+            }
+            return ["Order BY ".implode(',', $sql)];
         }
         return [];
     }

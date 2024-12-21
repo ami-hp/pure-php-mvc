@@ -11,26 +11,22 @@ class HomeController extends Controller
     {
         $userModel = new User();
 
-        $insert = $userModel
-            ->insertIgnore()
-            ->onDuplicateKeyUpdate(null,['username'=>'done_x'.rand(1,51)])
-            ->insert(
-                [
-                    'name' => 'ami'.rand(1,51),
-                    'username'=> 'test_x',
-                    'password' => '123456',
-                ],
-                [
-                    'username'=> 'test_x',
-                    'password' => '123456',
-                ],
-            );
-        vamp($insert);
 
-//        $users = $userModel
-//            ->select(['username' , 'password'])
-//            ->get();
-//
-//        vamp($users);
+
+        $users = $userModel
+            ->query()
+            ->select(['username' , 'password'])
+            ->orderBy(['username' => 'asc' , 'password' => 'asc'])
+            ->limit(5)
+            ->get();
+
+        vamp($users);
+
+        $users = $userModel
+            ->query()
+            ->select(['username' , 'password'])
+            ->first();
+
+        vamp($users);
     }
 }
