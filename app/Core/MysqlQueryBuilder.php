@@ -2,7 +2,6 @@
 
 namespace App\Core;
 
-use App\Core\Mysql;
 use PDO;
 use PDOException;
 
@@ -37,12 +36,13 @@ class MysqlQueryBuilder
 
     protected string $action = "select";
 
+    protected array $insertArrays = [];
 
-    private array $columns = [];
-    private array $values = [];
+    private array $insertColumns = [];
+    private array $insertValues = [];
 
-    private array $update = [];
-    private bool $ignore = false;
+    private array $insertUpdateOnDuplicate = [];
+    private bool $insertIgnore = false;
 
     public function __construct()
     {
@@ -87,11 +87,7 @@ class MysqlQueryBuilder
                 );
                 break;
             case 'insert':
-                $sql = array_merge(
-                    [$this->buildInsertBase()],
-                    [$this->buildValues()],
-                    [$this->buildOnDuplicateKeyUpdate()]
-                );
+                $sql = $this->buildInsert();
                 break;
             case 'update':
                 break;
@@ -121,7 +117,6 @@ class MysqlQueryBuilder
         $this->limit(1);
 
         $sql = $this->toSql();
-        vamp($sql);
         $stmt = $this->connection->prepare($sql);
         $stmt->execute($this->bindings);
         return $stmt->fetch(PDO::FETCH_ASSOC);
@@ -144,20 +139,23 @@ class MysqlQueryBuilder
         return $stmt->fetch(PDO::FETCH_ASSOC)['count'];
     }
 
-    public function insert()
+    public function insert(array ...$dataArrays): bool
     {
+        $this->insertArrays = array_merge($this->insertArrays, $dataArrays);
         $sql = $this->setAction('insert')->buildSql();
         $stmt = $this->connection->prepare($sql);
-        // Binding values
-        foreach ($this->values as $i => $valueSet) {
+
+        foreach ($this->insertArrays as $i => $valueSet) {
             foreach ($valueSet as $j => $value) {
                 $stmt->bindValue(":val_{$i}_{$j}", $value);
             }
+            if($duplication = $this->insertUpdateOnDuplicate[$i]){
+                foreach ($duplication as $column => $value) {
+                    $stmt->bindValue(":update_{$i}_$column", $value);
+                }
+            }
         }
-        // Binding update values if present
-        foreach ($this->update as $column => $value) {
-            $stmt->bindValue(":update_$column", $value);
-        }
+
         try {
             $stmt->execute();
             return true;
@@ -234,59 +232,72 @@ class MysqlQueryBuilder
      * Insert Methods
      * ----------
      */
-    public function columns(array $columns): static
-    {
-        $this->columns = $columns;
-        return $this;
-    }
-
-    public function values(...$valuesSets): static
-    {
-        foreach ($valuesSets as $values) {
-            $this->values[] = $values;
-        }
-        return $this;
-    }
 
     public function insertIgnore(): static
     {
-        $this->ignore = true;
+        $this->insertIgnore = true;
         return $this;
     }
 
-    private function buildInsertBase()
+    private function buildInsertBase(): string
     {
-        return $this->ignore
-            ? "INSERT IGNORE INTO {$this->table} (".implode(', ', $this->columns).") "
-            : "INSERT INTO {$this->table} (".implode(', ', $this->columns).") ";
-    }
-
-    private function buildValues()
-    {
-        $valuesParts = [];
-        $placeholders = [];
-        foreach ($this->values as $i => $valueSet) {
-            $rowPlaceholders = [];
-            foreach ($valueSet as $j => $value) {
-                $placeholder = ":val_{$i}_{$j}";
-                $rowPlaceholders[] = $placeholder;
-                $placeholders[$placeholder] = $value;
-            }
-            $valuesParts[] = "(".implode(', ', $rowPlaceholders).")";
+        $sql[] = "INSERT";
+        if ($this->insertIgnore) {
+            $sql[] = "IGNORE";
         }
-        return "VALUES ".implode(', ', $valuesParts);
+        $sql[] = "INTO {$this->table}";
+
+        return implode(' ', $sql);
     }
 
-    private function buildOnDuplicateKeyUpdate()
+    private function buildInsertColumns(array $valueSet): string
     {
-        if (!empty($this->update)) {
+        return "(".implode(',', array_keys($valueSet)).")";
+    }
+
+    private function buildInsertValues($i , $valueSet): string
+    {
+        $placeholders = [];
+
+        foreach ($valueSet as $j => $value) {
+            $placeholder = ":val_{$i}_{$j}";
+            $placeholders[$placeholder] = $value;
+        }
+
+        return "VALUES (".implode(',', array_keys($placeholders)).")";
+    }
+
+    private function buildInsert(): array
+    {
+        $sql = [];
+
+        foreach ($this->insertArrays as $i => $valueSet) {
+            $sql[] = $this->buildInsertBase();
+
+            $sql[] = $this->buildInsertColumns($valueSet);
+
+            $sql[] = $this->buildInsertValues($i , $valueSet);
+
+            if($duplicate = $this->buildOnDuplicateKeyUpdate($i)){
+                $sql[] = $duplicate;
+            }
+
+            $sql[] = ";";
+        }
+
+        return $sql;
+    }
+
+    private function buildOnDuplicateKeyUpdate($index): ?string
+    {
+        if (!empty($this->insertUpdateOnDuplicate[$index])) {
             $updateParts = [];
-            foreach ($this->update as $column => $value) {
-                $updateParts[] = "$column = :update_$column";
+            foreach ($this->insertUpdateOnDuplicate[$index] as $column => $value) {
+                $updateParts[] = "$column = :update_{$index}_{$column}";
             }
             return " ON DUPLICATE KEY UPDATE ".implode(', ', $updateParts);
         }
-        return "";
+        return null;
     }
 
     private function quoteValue($value)
@@ -295,16 +306,8 @@ class MysqlQueryBuilder
         return is_numeric($value) ? $value : "'".addslashes($value)."'";
     }
 
-    /**
-     * example: onDuplicateKeyUpdate(['email' => 'eve_new@example.com'])
-     * @param  array  $update
-     * @return $this
-     */
-    public
-    function onDuplicateKeyUpdate(
-        array $update
-    ): static {
-        $this->update = $update;
+    public function onDuplicateKeyUpdate(array|null ...$duplicateOn): static {
+        $this->insertUpdateOnDuplicate = $duplicateOn;
         return $this;
     }
 
@@ -315,16 +318,12 @@ class MysqlQueryBuilder
      * only used in this class
      */
 
-    protected
-    function setAction(
-        string $action
-    ): static {
+    private function setAction(string $action): static {
         $this->action = $action;
         return $this;
     }
 
-    private
-    function buildSelect(): array
+    private function buildSelect(): array
     {
         $sql = ["SELECT"];
         if ($this->distinct) {
@@ -335,8 +334,7 @@ class MysqlQueryBuilder
         return $sql;
     }
 
-    private
-    function buildWhere(): array
+    private function buildWhere(): array
     {
         if ($this->wheres) {
             return ["WHERE ".implode(' AND ', $this->wheres)];
@@ -344,8 +342,7 @@ class MysqlQueryBuilder
         return [];
     }
 
-    private
-    function buildGroupBy(): array
+    private function buildGroupBy(): array
     {
         if ($this->groupBys) {
             return ["GROUP BY ".implode(', ', $this->groupBys)];
@@ -353,8 +350,7 @@ class MysqlQueryBuilder
         return [];
     }
 
-    private
-    function buildLimit(): array
+    private function buildLimit(): array
     {
         if ($this->limit) {
             return ["LIMIT {$this->limit}"];
@@ -362,8 +358,7 @@ class MysqlQueryBuilder
         return [];
     }
 
-    private
-    function buildOffset(): array
+    private function buildOffset(): array
     {
         if ($this->offset) {
             return ["OFFSET {$this->offset}"];

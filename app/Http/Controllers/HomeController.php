@@ -13,15 +13,24 @@ class HomeController extends Controller
 
         $insert = $userModel
             ->insertIgnore()
-            ->columns(['name' , 'username', 'password'])
-            ->values(['ami'.rand(1,51) , 'ami_hp'.rand(1,51) , '123456'])
-            ->insert();
+            ->onDuplicateKeyUpdate(null,['username'=>'done_x'.rand(1,51)])
+            ->insert(
+                [
+                    'name' => 'ami'.rand(1,51),
+                    'username'=> 'test_x',
+                    'password' => '123456',
+                ],
+                [
+                    'username'=> 'test_x',
+                    'password' => '123456',
+                ],
+            );
         vamp($insert);
 
-        $users = $userModel
-            ->select(['username' , 'password'])
-            ->get();
-
-        vamp($users);
+//        $users = $userModel
+//            ->select(['username' , 'password'])
+//            ->get();
+//
+//        vamp($users);
     }
 }
