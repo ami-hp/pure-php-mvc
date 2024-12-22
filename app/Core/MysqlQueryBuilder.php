@@ -2,8 +2,10 @@
 
 namespace App\Core;
 
+use AllowDynamicProperties;
 use PDO;
 use PDOException;
+use PDOStatement;
 
 // using Data Mapper, Behavioral Design Pattern
 
@@ -25,25 +27,26 @@ class MysqlQueryBuilder
 {
     protected PDO $connection;
     protected string $table;
-    protected array $selects = [];
-    protected array $wheres = [];
-    protected array $bindings = [];
-    protected array $groupBys = [];
-    protected array $orderBys = [];
-    protected false|int $limit = false;
-    protected false|int $offset = false;
-    protected bool $distinct = false;
-    protected bool $toSqlStatus = false;
-
-    protected string $action = "select";
-
-    protected array $insertArrays = [];
-
-    private array $insertColumns = [];
-    private array $insertValues = [];
-
+    private array $selects = [];
+    private array $wheres = [];
+    private array $bindings = [];
+    private array $groupBys = [];
+    private array $orderBys = [];
+    private false|int $limit = false;
+    private false|int $offset = false;
+    private bool $distinct = false;
+    private bool $toSqlStatus = false;
+    private string $action = "select";
+    private array $insertArrays = [];
+    private array $updateArrays = [];
     private array $insertUpdateOnDuplicate = [];
     private bool $insertIgnore = false;
+    private array $join = [];
+
+
+    const UPDATE_BINDER = ":update_";
+    const WHERE_BINDER = ":where_";
+    const VALUE_BINDER = ":value_";
 
     public function __construct()
     {
@@ -58,8 +61,9 @@ class MysqlQueryBuilder
 
     public function where($column, $operator, $value): static
     {
-        $this->wheres[] = "{$column} {$operator} ?";
-        $this->bindings[] = $value;
+        $placeholder = self::WHERE_BINDER.rand(1,10000)."_"."$column";
+        $this->wheres[] = "{$column} {$operator} {$placeholder}";
+        $this->bindings[$placeholder] = $value;
         return $this;
     }
 
@@ -75,19 +79,13 @@ class MysqlQueryBuilder
 
         switch ($this->action) {
             case 'select':
-                $sql = array_merge(
-                    $this->buildSelect(),
-                    $this->buildWhere(),
-                    $this->buildGroupBy(),
-                    $this->buildOrderBy(),
-                    $this->buildLimit(),
-                    $this->buildOffset()
-                );
+                $sql = $this->buildSelect();
                 break;
             case 'insert':
                 $sql = $this->buildInsert();
                 break;
             case 'update':
+                $sql = $this->buildUpdate();
                 break;
             case 'delete':
                 break;
@@ -96,6 +94,12 @@ class MysqlQueryBuilder
         }
         return implode(' ', $sql);
     }
+
+
+    /**
+     * SELECT Methods
+     * ----------
+     */
 
     public function get(): false|array|string
     {
@@ -106,7 +110,8 @@ class MysqlQueryBuilder
         }
 
         $stmt = $this->connection->prepare($sql);
-        $stmt->execute($this->bindings);
+        $this->bind($stmt);
+        $stmt->execute();
         return $stmt->fetchAll(PDO::FETCH_ASSOC);
     }
 
@@ -120,11 +125,12 @@ class MysqlQueryBuilder
         }
 
         $stmt = $this->connection->prepare($sql);
-        $stmt->execute($this->bindings);
+        $this->bind($stmt);
+        $stmt->execute();
         return $stmt->fetch(PDO::FETCH_ASSOC);
     }
 
-    public function all()
+    public function all(): false|array
     {
         $stmt = $this->connection->query("SELECT * FROM {$this->table}");
         return $stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -137,69 +143,10 @@ class MysqlQueryBuilder
             $sql .= " WHERE ".implode(' AND ', $this->wheres);
         }
         $stmt = $this->connection->prepare($sql);
-        $stmt->execute($this->bindings);
+        $this->bind($stmt);
+        $stmt->execute();
         return $stmt->fetch(PDO::FETCH_ASSOC)['count'];
     }
-
-    public function insert(array ...$dataArrays): bool
-    {
-        $this->insertArrays = array_merge($this->insertArrays, $dataArrays);
-        $sql = $this->setAction('insert')->buildSql();
-        $stmt = $this->connection->prepare($sql);
-
-        foreach ($this->insertArrays as $i => $valueSet) {
-            foreach ($valueSet as $j => $value) {
-                $stmt->bindValue(":val_{$i}_{$j}", $value);
-            }
-
-            if (!empty($this->insertUpdateOnDuplicate) && $duplication = $this->insertUpdateOnDuplicate[$i]) {
-                foreach ($duplication as $column => $value) {
-                    $stmt->bindValue(":update_{$i}_$column", $value);
-                }
-            }
-        }
-
-        try {
-            $stmt->execute();
-            return true;
-        } catch (PDOException $e) {
-            echo "Error: ".$e->getMessage();
-            return false;
-        }
-    }
-
-    public function update($data)
-    {
-        $set = '';
-        foreach ($data as $key => $value) {
-            $set .= "{$key} = ?, ";
-            $this->bindings[] = $value;
-        }
-        $set = rtrim($set, ', ');
-        $sql = "UPDATE {$this->table} SET {$set}";
-        if ($this->wheres) {
-            $sql .= " WHERE ".implode(' AND ', $this->wheres);
-        }
-        $stmt = $this->connection->prepare($sql);
-        return $stmt->execute($this->bindings);
-    }
-
-    public function delete()
-    {
-        $sql = "DELETE FROM {$this->table}";
-        if ($this->wheres) {
-            $sql .= " WHERE ".implode(' AND ', $this->wheres);
-        }
-        $stmt = $this->connection->prepare($sql);
-        return $stmt->execute($this->bindings);
-    }
-
-    // Additional methods for other SQL parts like joins, order by, group by, etc., can be added similarly
-
-    /**
-     * SELECT Methods
-     * ----------
-     */
 
     public function select($columns = ['*']): static
     {
@@ -237,6 +184,38 @@ class MysqlQueryBuilder
         return $this;
     }
 
+    private function buildSelect(): array
+    {
+        return array_merge(
+            $this->buildSelectBase(),
+            $this->buildWhere(),
+            $this->buildGroupBy(),
+            $this->buildOrderBy(),
+            $this->buildLimit(),
+            $this->buildOffset()
+        );
+    }
+
+    private function buildSelectBase(): array
+    {
+        $sql = ["SELECT"];
+        if ($this->distinct) {
+            $sql[] = "DISTINCT";
+        }
+        $sql[] = empty($this->selects) ? "*" : implode(', ', $this->selects);
+        $sql[] = "FROM {$this->table}";
+        return $sql;
+    }
+
+    private function buildGroupBy(): array
+    {
+        if ($this->groupBys) {
+            return ["GROUP BY ".implode(', ', $this->groupBys)];
+        }
+        return [];
+    }
+
+
     /**
      * Insert Methods
      * ----------
@@ -252,6 +231,28 @@ class MysqlQueryBuilder
     {
         $this->insertUpdateOnDuplicate = $duplicateOn;
         return $this;
+    }
+
+    public function insert(array ...$dataArrays): bool
+    {
+        $this->addInsertArray($dataArrays);
+        $sql = $this->setAction('insert')->buildSql();
+        $stmt = $this->connection->prepare($sql);
+
+        $this->bind($stmt);
+
+        try {
+            $stmt->execute();
+            return true;
+        } catch (PDOException $e) {
+            vamp("Error: ".$e->getMessage());
+            return false;
+        }
+    }
+
+    private function addInsertArray($data): void
+    {
+        $this->insertArrays = array_merge($this->insertArrays, $data);
     }
 
     private function buildInsertBase(): string
@@ -272,14 +273,12 @@ class MysqlQueryBuilder
 
     private function buildInsertValues($i, $valueSet): string
     {
-        $placeholders = [];
-
         foreach ($valueSet as $j => $value) {
-            $placeholder = ":val_{$i}_{$j}";
-            $placeholders[$placeholder] = $value;
+            $placeholder = self::VALUE_BINDER."{$i}_{$j}";
+            $this->bindings[$placeholder] = $value;
         }
 
-        return "VALUES (".implode(',', array_keys($placeholders)).")";
+        return "VALUES (".implode(',', array_keys($this->bindings)).")";
     }
 
     private function buildInsert(): array
@@ -308,12 +307,98 @@ class MysqlQueryBuilder
         if (!empty($this->insertUpdateOnDuplicate[$index])) {
             $updateParts = [];
             foreach ($this->insertUpdateOnDuplicate[$index] as $column => $value) {
-                $updateParts[] = "$column = :update_{$index}_{$column}";
+                $placeholder = self::UPDATE_BINDER."{$index}_{$column}";
+                $updateParts[] = "{$column} = {$placeholder}";
+                $this->bindings[$placeholder] = $value;
             }
             return " ON DUPLICATE KEY UPDATE ".implode(', ', $updateParts);
         }
         return null;
     }
+
+    /**
+     * UPDATE METHODS
+     * ----------------
+     */
+
+    public function update(array $dataArrays)
+    {
+        $this->addUpdateArray($dataArrays);
+        $sql = $this->setAction('update')->buildSql();
+
+        if ($this->toSqlStatus) {
+            return $sql;
+        }
+
+        $stmt = $this->connection->prepare($sql);
+
+        $this->bind($stmt);
+
+        try {
+            $stmt->execute();
+            return true;
+        } catch (PDOException $e) {
+            vamp("Error: ".$e->getMessage());
+            return false;
+        }
+    }
+
+    public function join(string $table, string $column1, string $operator, string $column2): static
+    {
+        $this->join = [
+            'table' => $table,
+            'from' => $column1,
+            'operator' => $operator,
+            'to' => $column2,
+        ];
+        return $this;
+    }
+
+    private function addUpdateArray($data): void
+    {
+        $this->updateArrays = array_merge($this->updateArrays, $data);
+    }
+
+    private function buildUpdateBase(): string
+    {
+        return "UPDATE {$this->table}";
+    }
+
+    private function buildJoin()
+    {
+        $j = $this->join;
+        return "JOIN {$j['table']} ON {$j['from']} {$j['operator']} {$j['to']}";
+    }
+    private function buildSet()
+    {
+        $sql = [];
+        foreach ($this->updateArrays as $column => $newValue){
+            $sql[] = "$column = {$newValue}";
+        }
+        // additional case end
+        // additional raw
+        return "SET " . implode(', ' ,$sql);
+    }
+
+    private function buildUpdate(): array
+    {
+        if(empty($this->updateArrays)){
+            throw new \Exception('update() argument must be filled');
+        }
+
+        $sql = [];
+
+        $sql[] = $this->buildUpdateBase();
+        if(!empty($this->join)){
+            $sql[] = $this->buildJoin();
+        }
+        $sql[] = $this->buildSet();
+        $sql[] = implode(' ' , $this->buildWhere());
+        $sql[] = $this->buildLimit()[0];
+
+        return $sql;
+    }
+
 
     /**
      * PRIVATE METHODS
@@ -327,29 +412,10 @@ class MysqlQueryBuilder
         return $this;
     }
 
-    private function buildSelect(): array
-    {
-        $sql = ["SELECT"];
-        if ($this->distinct) {
-            $sql[] = "DISTINCT";
-        }
-        $sql[] = empty($this->selects) ? "*" : implode(', ', $this->selects);
-        $sql[] = "FROM {$this->table}";
-        return $sql;
-    }
-
     private function buildWhere(): array
     {
         if ($this->wheres) {
             return ["WHERE ".implode(' AND ', $this->wheres)];
-        }
-        return [];
-    }
-
-    private function buildGroupBy(): array
-    {
-        if ($this->groupBys) {
-            return ["GROUP BY ".implode(', ', $this->groupBys)];
         }
         return [];
     }
@@ -381,4 +447,13 @@ class MysqlQueryBuilder
         }
         return [];
     }
+
+    private function bind(PDOStatement $statement): void
+    {
+        foreach ($this->bindings as $placeholder => $value) {
+            $statement->bindValue($placeholder, $value);
+        }
+        $this->bindings = [];
+    }
+
 }
