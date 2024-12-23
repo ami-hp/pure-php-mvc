@@ -28,7 +28,8 @@ class MysqlQueryBuilder
     protected PDO $connection;
     protected string $table;
     private array $selects = [];
-    private array $wheres = [];
+    private array $andWheres = [];
+    private array $orWheres = [];
     private array $bindings = [];
     private array $groupBys = [];
     private array $orderBys = [];
@@ -42,7 +43,9 @@ class MysqlQueryBuilder
     private array $insertUpdateOnDuplicate = [];
     private bool $insertIgnore = false;
     private array $join = [];
+    private array $callbackValues = [];
 
+    private bool $isCallback = false;
 
     const UPDATE_BINDER = ":update_";
     const WHERE_BINDER = ":where_";
@@ -59,11 +62,45 @@ class MysqlQueryBuilder
         return $this;
     }
 
-    public function where($column, $operator, $value): static
+    public function where(string|callable $column, string $operator = null, $value = null): static
     {
-        $placeholder = self::WHERE_BINDER.rand(1,10000)."_"."$column";
-        $this->wheres[] = "{$column} {$operator} {$placeholder}";
-        $this->bindings[$placeholder] = $value;
+        if (is_callable($column)) {
+            $query = new static();
+            $column($query);
+            $this->andWheres[] = '('.$query->buildWhereClause(false).')';
+            $this->bindings = array_merge($this->bindings, $query->bindings);
+        } else {
+            $placeholder = self::WHERE_BINDER.$this->randomPlaceholder()."_$column";
+            $this->andWheres[] = "{$column} {$operator} {$placeholder}";
+            $this->bindings[$placeholder] = $value;
+        }
+        return $this;
+    }
+
+    public function whereIn(string $column, array $values): static
+    {
+        $placeholders = [];
+        foreach ($values as $index => $value) {
+            $placeholder = self::WHERE_BINDER.$this->randomPlaceholder()."_{$column}_{$index}";
+            $placeholders[] = $placeholder;
+            $this->bindings[$placeholder] = $value;
+        }
+        $this->andWheres[] = "{$column} IN (".implode(', ', $placeholders).")";
+        return $this;
+    }
+
+    public function orWhere(string|callable $column, string $operator = null, $value = null): static
+    {
+        if (is_callable($column)) {
+            $query = new static();
+            $column($query);
+            $this->orWheres[] = '('.$query->buildWhereClause(false).')';
+            $this->bindings = array_merge($this->bindings, $query->bindings);
+        } else {
+            $placeholder = self::WHERE_BINDER.$this->randomPlaceholder()."_$column";
+            $this->orWheres[] = "{$column} {$operator} {$placeholder}";
+            $this->bindings[$placeholder] = $value;
+        }
         return $this;
     }
 
@@ -139,8 +176,8 @@ class MysqlQueryBuilder
     public function count()
     {
         $sql = "SELECT COUNT(*) AS count FROM {$this->table}";
-        if ($this->wheres) {
-            $sql .= " WHERE ".implode(' AND ', $this->wheres);
+        if ($this->andWheres) {
+            $sql .= " WHERE ".implode(' AND ', $this->andWheres);
         }
         $stmt = $this->connection->prepare($sql);
         $this->bind($stmt);
@@ -188,7 +225,7 @@ class MysqlQueryBuilder
     {
         return array_merge(
             $this->buildSelectBase(),
-            $this->buildWhere(),
+            [$this->buildWhereClause()],
             $this->buildGroupBy(),
             $this->buildOrderBy(),
             $this->buildLimit(),
@@ -369,31 +406,32 @@ class MysqlQueryBuilder
         $j = $this->join;
         return "JOIN {$j['table']} ON {$j['from']} {$j['operator']} {$j['to']}";
     }
+
     private function buildSet()
     {
         $sql = [];
-        foreach ($this->updateArrays as $column => $newValue){
+        foreach ($this->updateArrays as $column => $newValue) {
             $sql[] = "$column = {$newValue}";
         }
         // additional case end
         // additional raw
-        return "SET " . implode(', ' ,$sql);
+        return "SET ".implode(', ', $sql);
     }
 
     private function buildUpdate(): array
     {
-        if(empty($this->updateArrays)){
+        if (empty($this->updateArrays)) {
             throw new \Exception('update() argument must be filled');
         }
 
         $sql = [];
 
         $sql[] = $this->buildUpdateBase();
-        if(!empty($this->join)){
+        if (!empty($this->join)) {
             $sql[] = $this->buildJoin();
         }
         $sql[] = $this->buildSet();
-        $sql[] = implode(' ' , $this->buildWhere());
+        $sql[] = $this->buildWhereClause(false);
         $sql[] = $this->buildLimit()[0];
 
         return $sql;
@@ -412,12 +450,25 @@ class MysqlQueryBuilder
         return $this;
     }
 
-    private function buildWhere(): array
+    private function buildWhereClause(bool $includeWhereKeyword = true): ?string
     {
-        if ($this->wheres) {
-            return ["WHERE ".implode(' AND ', $this->wheres)];
+        $sql = [];
+
+        if ($includeWhereKeyword && (!empty($this->andWheres) || !empty($this->orWheres))) {
+            $sql[] = "WHERE";
         }
-        return [];
+
+        if (!empty($this->andWheres)) {
+            $sql[] = implode(' AND ', $this->andWheres);
+        }
+        vamp($this->andWheres,$this->orWheres , $this->bindings);
+        if (!empty($this->orWheres)) {
+            if (!empty($this->andWheres)) {
+                $sql[] = "OR";
+            }
+            $sql[] = implode(' OR ', $this->orWheres);
+        }
+        return implode(" ", $sql);
     }
 
     private function buildOrderBy(): array
@@ -456,4 +507,9 @@ class MysqlQueryBuilder
         $this->bindings = [];
     }
 
+    private function randomPlaceholder(): int|string
+    {
+        return bin2hex(random_bytes(5));
+//        return generateUUID("_");
+    }
 }

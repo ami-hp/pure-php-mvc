@@ -1,20 +1,36 @@
 <?php
 const DS = DIRECTORY_SEPARATOR;
 
-if(!function_exists('vamp')){
-    function vamp($VARDUMP): void
+if (!function_exists('vamp')) {
+    function vamp(mixed ...$VARDUMP): void
     {
-        echo "<mark style='background-color: transparent'><pre style='font-size:10px; border:1px inset orangered;background-color:#e1e1e1;text-align: left;' dir='ltr'>";
-        var_dump($VARDUMP);
+        echo "<mark style='background-color: transparent'><pre style='overflow-x: auto;font-size:10px; border:1px inset orangered;background-color:#e1e1e1;text-align: left;' dir='ltr'>";
+
+        for ($i = 1; $i <= count($VARDUMP); $i++) {
+            var_dump($VARDUMP[$i-1]);
+            if($i != count($VARDUMP)){
+                echo "<hr/>";
+            }
+        }
         echo "</pre></mark>";
     }
 }
+if (!function_exists('generateUUID')) {
+    function generateUUID($separator = '-') {
+        return sprintf("%04x%04x$separator%04x$separator%04x$separator%04x$separator%04x%04x%04x",
+            mt_rand(0, 0xffff), mt_rand(0, 0xffff), mt_rand(0, 0xffff),
+            mt_rand(0, 0x0fff) | 0x4000,
+            mt_rand(0, 0x3fff) | 0x8000,
+            mt_rand(0, 0xffff), mt_rand(0, 0xffff), mt_rand(0, 0xffff)
+        );
+    }
+}
 
-if(!function_exists('env')){
-    function env($key , $default = null) : mixed
+if (!function_exists('env')) {
+    function env($key, $default = null): mixed
     {
-        $envFilePath = realpath(__DIR__ .'/../.env');
-        if($envFilePath){
+        $envFilePath = realpath(__DIR__.'/../.env');
+        if ($envFilePath) {
             $envFile = @file_get_contents($envFilePath);
             $envVariables = [];
 
@@ -24,22 +40,21 @@ if(!function_exists('env')){
                     $envVariables[$segments[0]] = $segments[1];
                 }
             }
-            if(isset($envVariables[$key])){
-                if(gettype($envVariables[$key]) === 'string'){
-                    $envVariables[$key] = str_replace("\n","" , trim($envVariables[$key]));
+            if (isset($envVariables[$key])) {
+                if (gettype($envVariables[$key]) === 'string') {
+                    $envVariables[$key] = str_replace("\n", "", trim($envVariables[$key]));
                 }
             }
 
             return $envVariables[$key] ?? $default;
-        }
-        else{
+        } else {
             return null;
         }
     }
 }
 
-if(!function_exists('config')){
-    function config($key = null, $default = null) : mixed
+if (!function_exists('config')) {
+    function config($key = null, $default = null): mixed
     {
         if (!$key) {
             return $default;
@@ -47,7 +62,7 @@ if(!function_exists('config')){
 
         $exp = explode('.', $key);
         $fileName = $exp[0];
-        $configPath = base_path('config/' . $fileName . '.php');
+        $configPath = base_path('config/'.$fileName.'.php');
 
         if (!file_exists($configPath)) {
             return $default;
@@ -70,8 +85,8 @@ if(!function_exists('config')){
     }
 }
 
-if(!function_exists('findNested')){
-    function findNested(string $keyString, array $array) : mixed
+if (!function_exists('findNested')) {
+    function findNested(string $keyString, array $array): mixed
     {
         $keys = explode('.', $keyString);
         $value = $array;
@@ -88,24 +103,24 @@ if(!function_exists('findNested')){
     }
 }
 
-if(!function_exists('base_path')){
+if (!function_exists('base_path')) {
     function base_path(string $path = ''): string
     {
-        $path = str_replace('/','\\' , $path);
-        return join(DS , [__DIR__ . '\..' , $path]);
+        $path = str_replace('/', '\\', $path);
+        return join(DS, [__DIR__.'\..', $path]);
     }
 }
 
-if(!function_exists('view')){
+if (!function_exists('view')) {
     function view($viewName, $data = [])
     {
         extract($data); // Extract data into variables
 
-        if(str_contains($viewName , "::")){
-            list($module , $viewPath) = explode("::" , $viewName);
-            $path = base_path('/modules/'.$module.'/resources/views/' . $viewPath . '.php');
+        if (str_contains($viewName, "::")) {
+            list($module, $viewPath) = explode("::", $viewName);
+            $path = base_path('/modules/'.$module.'/resources/views/'.$viewPath.'.php');
         } else {
-            $path = base_path('/resources/views/' . $viewName . '.php');
+            $path = base_path('/resources/views/'.$viewName.'.php');
         }
 
         include_once $path;

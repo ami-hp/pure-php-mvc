@@ -10,28 +10,29 @@ class HomeController extends Controller
 {
     public function index()
     {
-       try{
-           $userModel = new User();
+        try {
+            $userModel = new User();
 
-           $users = $userModel
-               ->query()
-               ->where('id', '>' , '1')
-               ->where('id', '<' , '4')
-               ->orderBy(['username' => 'asc' , 'password' => 'asc'])
-               ->limit(5)
-               ->toSql()
-               ->update([
-                   'name' => json_encode('updated_to_me'),
-                   'password' => json_encode('random')
-               ]);
+            $users = $userModel
+                ->query()
+                ->where('username', '=', 'ami_hp')
+                ->orWhere(function ($query) {
+                    $query->where('id', '>', 85)
+                        ->orWhere(function ($query) {
+                            $query->whereIn('id', [1, 2]);
+                        })
+                        ->whereIn('id', [1, 5]);
+                })
+                ->toSql()
+                ->where('name', 'LIKE', 'ami')
+                ->get();
 
-           vamp($users);
+            vamp($users);
 
-
-       } catch (Throwable $e) {
-           vamp($e->getMessage());
-           vamp($e->getTraceAsString());
-       }
+        } catch (Throwable $e) {
+            vamp($e->getMessage());
+            vamp($e->getTraceAsString());
+        }
 
     }
 }
