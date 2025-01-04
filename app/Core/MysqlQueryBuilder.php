@@ -229,7 +229,7 @@ class MysqlQueryBuilder
     {
         if (is_callable($sql)) {
             $query = new static();
-            $sql = $sql($query->select(1));
+            $sql = $sql($query->toSql()->select(1));
 
             if(gettype($sql) != 'string'){
                 throw new \Exception('must be string');
