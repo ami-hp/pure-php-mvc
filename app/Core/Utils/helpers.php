@@ -4,7 +4,7 @@ const DS = DIRECTORY_SEPARATOR;
 if (!function_exists('vamp')) {
     function vamp(mixed ...$VARDUMP): void
     {
-        echo "<mark style='background-color: transparent'><pre style='overflow-x: auto;font-size:10px; border:1px inset orangered;background-color:#e1e1e1;text-align: left;' dir='ltr'>";
+        echo "<mark style='background-color: transparent'><pre style='white-space: pre-wrap;font-size:10px; border:1px inset orangered;background-color:#e1e1e1;text-align: left;' dir='ltr'>";
 
         for ($i = 1; $i <= count($VARDUMP); $i++) {
             var_dump($VARDUMP[$i-1]);

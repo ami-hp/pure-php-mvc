@@ -26,6 +26,10 @@ class Model extends MysqlQueryBuilder
         return (new MysqlQueryBuilder())->table($this->table);
     }
 
+    public function getTable() : string
+    {
+        return $this->table;
+    }
 
 
 

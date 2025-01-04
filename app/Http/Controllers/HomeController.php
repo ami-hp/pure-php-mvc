@@ -8,23 +8,23 @@ use Throwable;
 
 class HomeController extends Controller
 {
-    public function index()
+    public function index(): void
     {
         try {
             $userModel = new User();
 
             $users = $userModel
                 ->query()
-                ->where('username', '=', 'ami_hp')
-                ->orWhere(function ($query) {
-                    $query->where('id', '>', 85)
-                        ->orWhere(function ($query) {
-                            $query->whereIn('id', [1, 2]);
-                        })
-                        ->whereIn('id', [1, 5]);
+                ->whereNot('username', '=', 'guest')
+                ->orWhereExists(function ($query) use ($userModel){
+                    $query->table($userModel->getTable());
+                    $query->where(function ($query) {
+                        $query->whereNotIn('id', [1, 2]);
+                    });
+                    $query->whereNotBetween('id', 54, 60);
+                    return $query->toSql()->get();
                 })
-                ->toSql()
-                ->where('name', 'LIKE', 'ami')
+                ->where('name', 'LIKE', '%ami%')
                 ->get();
 
             vamp($users);

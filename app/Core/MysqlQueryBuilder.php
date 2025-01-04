@@ -64,20 +64,89 @@ class MysqlQueryBuilder
 
     public function where(string|callable $column, string $operator = null, $value = null): static
     {
-        if (is_callable($column)) {
-            $query = new static();
-            $column($query);
-            $this->andWheres[] = '('.$query->buildWhereClause(false).')';
-            $this->bindings = array_merge($this->bindings, $query->bindings);
-        } else {
-            $placeholder = self::WHERE_BINDER.$this->randomPlaceholder()."_$column";
-            $this->andWheres[] = "{$column} {$operator} {$placeholder}";
-            $this->bindings[$placeholder] = $value;
-        }
+        $this->processWhere($column,$operator,$value);
         return $this;
     }
 
+    public function whereNot(string|callable $column, string $operator = null, $value = null): static
+    {
+        $this->processWhere($column,$operator,$value , true);
+        return $this;
+    }
+
+    private function processWhere(string|callable $column, string $operator = null, $value = null, bool $not = false , bool $or = false): void
+    {
+        if (is_callable($column)) {
+            $query = new static();
+            $column($query);
+
+            $sql = $query->buildWhereClause(false);
+
+            if($not){
+                $sql = "NOT ($sql)";
+            }
+
+            if(!$or){
+                $this->andWheres[] = $sql;
+            } else {
+                $this->orWheres[] = $sql;
+            }
+
+            $this->bindings = array_merge($this->bindings, $query->bindings);
+        } else {
+            $placeholder = self::WHERE_BINDER.$this->randomPlaceholder()."_$column";
+
+            $sql[] = $column;
+            if($this->getOperator($operator)){
+                $sql[] = $operator;
+            } else {
+                $sql[] = '=';
+                $value = $operator;
+            }
+            $sql[] = $placeholder;
+
+            $sql = implode(' ',$sql);
+
+            if($not){
+                $sql = "NOT ($sql)";
+            }
+            if(!$or){
+                $this->andWheres[] = $sql;
+            } else {
+                $this->orWheres[] = $sql;
+            }
+
+            $this->bindings[$placeholder] = $value;
+        }
+    }
+
+    private function getOperator(string $operator = '=') : string
+    {
+        return match ($operator){
+            '=', 'eq' => '=',
+            '<>','neq'=> '!=',
+            '>','gt' => '>',
+            '>=','gt-eq'=> '>=',
+            '<','lt' => '<',
+            '<=', 'lt-eq' => '<=',
+            'like' => 'LIKE',
+            default => false
+        };
+    }
+
     public function whereIn(string $column, array $values): static
+    {
+        $this->processWhereIn($column, $values);
+        return $this;
+    }
+
+    public function whereNotIn(string $column, array $values): static
+    {
+        $this->processWhereIn($column, $values , true);
+        return $this;
+    }
+
+    private function processWhereIn(string $column, array $values, bool $not = false): void
     {
         $placeholders = [];
         foreach ($values as $index => $value) {
@@ -85,23 +154,110 @@ class MysqlQueryBuilder
             $placeholders[] = $placeholder;
             $this->bindings[$placeholder] = $value;
         }
-        $this->andWheres[] = "{$column} IN (".implode(', ', $placeholders).")";
+
+        $sql = $column . ($not ? ' NOT' : '') . ' IN (' . implode(', ', $placeholders) . ')';
+
+        $this->andWheres[] = $sql;
+    }
+
+    public function whereBetween(string $column, int $value1, int $value2): static
+    {
+
+        $this->processWhereBetween($column,$value1,$value2);
+        return $this;
+    }
+
+    public function whereNotBetween(string $column, int $value1, int $value2): static
+    {
+
+        $this->processWhereBetween($column,$value1,$value2,true);
+        return $this;
+    }
+
+    public function processWhereBetween(string $column, int $value1, int $value2 , bool $not = false): static
+    {
+
+        $placeholder = self::WHERE_BINDER.$this->randomPlaceholder()."_{$column}_1";
+        $placeholders[] = $placeholder;
+        $this->bindings[$placeholder] = $value1;
+
+        $placeholder = self::WHERE_BINDER.$this->randomPlaceholder()."_{$column}_2";
+        $placeholders[] = $placeholder;
+        $this->bindings[$placeholder] = $value2;
+
+        $sql = $column . ($not ? ' NOT' : '') . ' BETWEEN '.implode(' AND ', $placeholders);
+        $this->andWheres[] = $sql;
         return $this;
     }
 
     public function orWhere(string|callable $column, string $operator = null, $value = null): static
     {
-        if (is_callable($column)) {
+        $this->processWhere($column,$operator,$value , or: true);
+        return $this;
+    }
+
+    public function orWhereNot(string|callable $column, string $operator = null, $value = null): static
+    {
+        $this->processWhere($column,$operator,$value , not: true , or: true);
+        return $this;
+    }
+
+    public function orWhereExists(string|callable $sql): static
+    {
+        $this->processWhereExists($sql , or: true);
+        return $this;
+    }
+
+    public function orWhereNotExists(string|callable $sql): static
+    {
+        $this->processWhereExists($sql , not: true , or: true);
+        return $this;
+    }
+
+    public function whereNotExists(string|callable $sql): static
+    {
+        $this->processWhereExists($sql , not: true);
+        return $this;
+    }
+    public function whereExists(string|callable $sql): static
+    {
+        $this->processWhereExists($sql);
+        return $this;
+    }
+
+    private function processWhereExists(string|callable $sql , bool $not = false, bool $or = false) : void
+    {
+        if (is_callable($sql)) {
             $query = new static();
-            $column($query);
-            $this->orWheres[] = '('.$query->buildWhereClause(false).')';
+            $sql = $sql($query->select(1));
+
+            if(gettype($sql) != 'string'){
+                throw new \Exception('must be string');
+            }
+
             $this->bindings = array_merge($this->bindings, $query->bindings);
         } else {
-            $placeholder = self::WHERE_BINDER.$this->randomPlaceholder()."_$column";
-            $this->orWheres[] = "{$column} {$operator} {$placeholder}";
-            $this->bindings[$placeholder] = $value;
+            if($not){
+                $sql = "NOT ($sql)";
+            }
+            if(!$or){
+                $this->andWheres[] = $sql;
+            } else {
+                $this->orWheres[] = $sql;
+            }
         }
-        return $this;
+
+        $sql = "EXISTS ($sql)";
+
+        if($not){
+            $sql = "NOT $sql";
+        }
+
+        if(!$or){
+            $this->andWheres[] = $sql;
+        } else {
+            $this->orWheres[] = $sql;
+        }
     }
 
     public function toSql(bool $state = true): static
@@ -461,7 +617,6 @@ class MysqlQueryBuilder
         if (!empty($this->andWheres)) {
             $sql[] = implode(' AND ', $this->andWheres);
         }
-        vamp($this->andWheres,$this->orWheres , $this->bindings);
         if (!empty($this->orWheres)) {
             if (!empty($this->andWheres)) {
                 $sql[] = "OR";
