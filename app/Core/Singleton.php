@@ -7,7 +7,7 @@ use App\Core\Base;
 trait Singleton
 {
     use Base;
-    protected static $instance = null;
+    protected static mixed $instance = null;
     public static function getInstance(): self
     {
         if (self::$instance === null) {

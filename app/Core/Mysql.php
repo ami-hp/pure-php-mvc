@@ -22,7 +22,7 @@ class Mysql extends \PDO
 
     }
 
-    protected static $instance = null;
+    protected static mixed $instance = null;
     public static function getInstance(): self
     {
         if (self::$instance === null) {

@@ -2,7 +2,7 @@
 
 namespace App\Core;
 
-use AllowDynamicProperties;
+use App\Core\Interfaces\QueryBuilderInterface;
 use PDO;
 use PDOException;
 use PDOStatement;
@@ -23,10 +23,10 @@ use PDOStatement;
 /**
  *
  */
-class MysqlQueryBuilder
+class MysqlQueryBuilder implements QueryBuilderInterface
 {
     protected PDO $connection;
-    protected string $table;
+    protected ?string $table = null;
     private array $selects = [];
     private array $andWheres = [];
     private array $orWheres = [];
@@ -43,10 +43,6 @@ class MysqlQueryBuilder
     private array $insertUpdateOnDuplicate = [];
     private bool $insertIgnore = false;
     private array $join = [];
-    private array $callbackValues = [];
-
-    private bool $isCallback = false;
-
     const UPDATE_BINDER = ":update_";
     const WHERE_BINDER = ":where_";
     const VALUE_BINDER = ":value_";
@@ -64,74 +60,227 @@ class MysqlQueryBuilder
 
     public function where(string|callable $column, string $operator = null, $value = null): static
     {
-        $this->processWhere($column,$operator,$value);
+        $this->processWhere($column, $operator, $value);
         return $this;
     }
 
     public function whereNot(string|callable $column, string $operator = null, $value = null): static
     {
-        $this->processWhere($column,$operator,$value , true);
+        $this->processWhere($column, $operator, $value, true);
         return $this;
     }
 
-    private function processWhere(string|callable $column, string $operator = null, $value = null, bool $not = false , bool $or = false): void
-    {
+    private function processWhere(
+        string|callable $column,
+        string $operator = null,
+        $value = null,
+        bool $not = false,
+        bool $or = false,
+        bool $bind = true
+    ): void {
         if (is_callable($column)) {
             $query = new static();
             $column($query);
 
-            $sql = $query->buildWhereClause(false);
+            $sql = "( ".$query->buildWhereClause(false)." )";
 
-            if($not){
-                $sql = "NOT ($sql)";
+            if ($not) {
+                $sql = "NOT $sql";
             }
 
-            if(!$or){
+            if (!$or) {
                 $this->andWheres[] = $sql;
             } else {
                 $this->orWheres[] = $sql;
             }
 
             $this->bindings = array_merge($this->bindings, $query->bindings);
+
         } else {
-            $placeholder = self::WHERE_BINDER.$this->randomPlaceholder()."_$column";
 
-            $sql[] = $column;
-            if($this->getOperator($operator)){
-                $sql[] = $operator;
-            } else {
-                $sql[] = '=';
-                $value = $operator;
-            }
-            $sql[] = $placeholder;
+            $sql = $this->handleWhereConditions($column, $operator, $value, $bind);
 
-            $sql = implode(' ',$sql);
-
-            if($not){
+            if ($not) {
                 $sql = "NOT ($sql)";
             }
-            if(!$or){
+            if (!$or) {
                 $this->andWheres[] = $sql;
             } else {
                 $this->orWheres[] = $sql;
             }
 
-            $this->bindings[$placeholder] = $value;
         }
     }
 
-    private function getOperator(string $operator = '=') : string
+
+    private function handleWhereConditions($column, $operator = null, $value = null, $bind = true) : string
     {
-        return match ($operator){
-            '=', 'eq' => '=',
-            '<>','neq'=> '!=',
-            '>','gt' => '>',
-            '>=','gt-eq'=> '>=',
-            '<','lt' => '<',
-            '<=', 'lt-eq' => '<=',
-            'like' => 'LIKE',
-            default => false
-        };
+        $sql = [$column];
+        if (is_null($operator) && is_null($value)) {
+            $this->addNullConditionToWhere($sql);
+        } elseif (!is_null($operator) && is_null($value)) {
+            $this->addOperatorConditionToWhere($sql, $operator, $column, $bind);
+        } elseif (!is_null($operator) && !is_null($value)) {
+            $this->addValueConditionToWhere($sql, $operator, $value, $column, $bind);
+        } else {
+            throw new \Exception("If value is NULL, use null-related methods e.g., whereNull, whereNotNull.");
+        }
+        return implode(' ', $sql);
+    }
+
+    private function addNullConditionToWhere(&$sql): void
+    {
+        $sql[] = 'IS NULL';
+    }
+
+    private function addOperatorConditionToWhere(&$sql, $operator, $column, $bind): void
+    {
+        if (!$this->getOperator($operator)) {
+            $sql[] = '=';
+            $value = $operator;
+            $placeholder = $this->handleWherePlaceholder($column, $bind, $value);
+            $sql[] = $placeholder;
+        } else {
+            throw new \Exception("If value is NULL, use null-related methods e.g., whereNull, whereNotNull.");
+        }
+    }
+
+    private function addValueConditionToWhere(&$sql, $operator, $value, $column, $bind): void
+    {
+        if ($this->getOperator($operator)) {
+            $sql[] = $operator;
+            $placeholder = $this->handleWherePlaceholder($column, $bind, $value);
+            $sql[] = $placeholder;
+        } else {
+            throw new \Exception("Operator doesn't exist.");
+        }
+    }
+
+    private function handleWherePlaceholder($column, $bind, &$value): string
+    {
+        $placeholder = self::WHERE_BINDER.$this->randomPlaceholder()."_$column";
+        if ($bind) {
+            $this->bindings[$placeholder] = $value;
+            return $placeholder;
+        } else {
+            return $value;
+        }
+    }
+
+    public function whereColumn(string $column1, string $operator = null, $column2 = null): static
+    {
+        $this->processWhere($column1, $operator, $column2 , false , false, false);
+        return $this;
+    }
+
+    public function orWhereColumn(string $column1, string $operator = null, $column2 = null): static
+    {
+        $this->processWhere($column1, $operator, $column2, false, true , false);
+        return $this;
+    }
+
+    public function whereAny(array $columns, string $operator = null, mixed $value = null): static
+    {
+        $this->processWhere(function ($query) use ($columns, $operator, $value) {
+            foreach ($columns as $c) {
+                $query->orWhere($c, $operator, $value);
+            }
+        });
+        return $this;
+    }
+
+    public function whereNotAny(array $columns, string $operator = null, mixed $value = null): static
+    {
+        $this->processWhere(function ($query) use ($columns, $operator, $value) {
+            foreach ($columns as $c) {
+                $query->orWhere($c, $operator, $value);
+            }
+        }, not: true);
+        return $this;
+    }
+
+    public function orWhereAny(array $columns, string $operator = null, mixed $value = null): static
+    {
+        $this->processWhere(function ($query) use ($columns, $operator, $value) {
+            foreach ($columns as $c) {
+                $query->orWhere($c, $operator, $value);
+            }
+        }, or: true);
+        return $this;
+    }
+
+    public function orWhereNotAny(array $columns, string $operator = null, mixed $value = null): static
+    {
+        $this->processWhere(function ($query) use ($columns, $operator, $value) {
+            foreach ($columns as $c) {
+                $query->orWhere($c, $operator, $value);
+            }
+        }, not: true, or: true);
+        return $this;
+    }
+
+    public function whereAll(array $columns, string $operator = null, mixed $value = null): static
+    {
+        $this->processWhere(function ($query) use ($columns, $operator, $value) {
+            foreach ($columns as $c) {
+                $query->where($c, $operator, $value);
+            }
+        });
+        return $this;
+    }
+
+    public function whereNone(array $columns, string $operator = null, mixed $value = null): static
+    {
+        $this->processWhere(function ($query) use ($columns, $operator, $value) {
+            foreach ($columns as $c) {
+                $query->where($c, $operator, $value);
+            }
+        }, not: true);
+        return $this;
+    }
+
+    public function orWhereAll(array $columns, string $operator = null, mixed $value = null): static
+    {
+        $this->processWhere(function ($query) use ($columns, $operator, $value) {
+            foreach ($columns as $c) {
+                $query->where($c, $operator, $value);
+            }
+        }, or: true);
+        return $this;
+    }
+
+    public function orWhereNone(array $columns, string $operator = null, mixed $value = null): static
+    {
+        $this->processWhere(function ($query) use ($columns, $operator, $value) {
+            foreach ($columns as $c) {
+                $query->where($c, $operator, $value);
+            }
+        }, not: true, or: true);
+        return $this;
+    }
+
+    public function whereNull(string $column): static
+    {
+        $this->processWhere($column, null, null , false , false , false);
+        return $this;
+    }
+
+    public function orWhereNull(string $column): static
+    {
+        $this->processWhere($column, null, null, false, true , false);
+        return $this;
+    }
+
+    public function whereNotNull(string $column): static
+    {
+        $this->processWhere($column, null, null, true);
+        return $this;
+    }
+
+    public function orWhereNotNull(string $column): static
+    {
+        $this->processWhere($column, null, null, true, true);
+        return $this;
     }
 
     public function whereIn(string $column, array $values): static
@@ -142,7 +291,7 @@ class MysqlQueryBuilder
 
     public function whereNotIn(string $column, array $values): static
     {
-        $this->processWhereIn($column, $values , true);
+        $this->processWhereIn($column, $values, true);
         return $this;
     }
 
@@ -155,7 +304,7 @@ class MysqlQueryBuilder
             $this->bindings[$placeholder] = $value;
         }
 
-        $sql = $column . ($not ? ' NOT' : '') . ' IN (' . implode(', ', $placeholders) . ')';
+        $sql = $column.($not ? ' NOT' : '').' IN ('.implode(', ', $placeholders).')';
 
         $this->andWheres[] = $sql;
     }
@@ -163,84 +312,104 @@ class MysqlQueryBuilder
     public function whereBetween(string $column, int $value1, int $value2): static
     {
 
-        $this->processWhereBetween($column,$value1,$value2);
+        $this->processWhereBetween($column, $value1, $value2);
         return $this;
     }
 
     public function whereNotBetween(string $column, int $value1, int $value2): static
     {
 
-        $this->processWhereBetween($column,$value1,$value2,true);
+        $this->processWhereBetween($column, $value1, $value2, true);
         return $this;
     }
 
-    public function processWhereBetween(string $column, int $value1, int $value2 , bool $not = false): static
+    public function whereBetweenColumn(string $column, string $value1, string $value2): static
     {
 
-        $placeholder = self::WHERE_BINDER.$this->randomPlaceholder()."_{$column}_1";
-        $placeholders[] = $placeholder;
-        $this->bindings[$placeholder] = $value1;
+        $this->processWhereBetween($column, $value1, $value2 , false , false);
+        return $this;
+    }
 
-        $placeholder = self::WHERE_BINDER.$this->randomPlaceholder()."_{$column}_2";
-        $placeholders[] = $placeholder;
-        $this->bindings[$placeholder] = $value2;
+    public function whereNotBetweenColumn(string $column, string $value1, string $value2): static
+    {
 
-        $sql = $column . ($not ? ' NOT' : '') . ' BETWEEN '.implode(' AND ', $placeholders);
+        $this->processWhereBetween($column, $value1, $value2, true , false);
+        return $this;
+    }
+
+    private function processWhereBetween(string $column, int|string $value1, int|string $value2, bool $not = false , bool $bind = true): static
+    {
+
+        if($bind){
+            $placeholder = self::WHERE_BINDER.$this->randomPlaceholder()."_{$column}_1";
+            $values[] = $placeholder;
+            $this->bindings[$placeholder] = $value1;
+
+            $placeholder = self::WHERE_BINDER.$this->randomPlaceholder()."_{$column}_2";
+            $values[] = $placeholder;
+            $this->bindings[$placeholder] = $value2;
+        } else {
+            $values[] = $value1;
+            $values[] = $value2;
+        }
+
+        $sql = $column.($not ? ' NOT' : '').' BETWEEN '.implode(' AND ', $values);
         $this->andWheres[] = $sql;
         return $this;
     }
 
     public function orWhere(string|callable $column, string $operator = null, $value = null): static
     {
-        $this->processWhere($column,$operator,$value , or: true);
+        $this->processWhere($column, $operator, $value, or: true);
         return $this;
     }
 
     public function orWhereNot(string|callable $column, string $operator = null, $value = null): static
     {
-        $this->processWhere($column,$operator,$value , not: true , or: true);
+        $this->processWhere($column, $operator, $value, not: true, or: true);
         return $this;
     }
 
     public function orWhereExists(string|callable $sql): static
     {
-        $this->processWhereExists($sql , or: true);
+        $this->processWhereExists($sql, or: true);
         return $this;
     }
 
     public function orWhereNotExists(string|callable $sql): static
     {
-        $this->processWhereExists($sql , not: true , or: true);
+        $this->processWhereExists($sql, not: true, or: true);
         return $this;
     }
 
     public function whereNotExists(string|callable $sql): static
     {
-        $this->processWhereExists($sql , not: true);
+        $this->processWhereExists($sql, not: true);
         return $this;
     }
+
     public function whereExists(string|callable $sql): static
     {
         $this->processWhereExists($sql);
         return $this;
     }
 
-    private function processWhereExists(string|callable $sql , bool $not = false, bool $or = false) : void
+    private function processWhereExists(string|callable $sql, bool $not = false, bool $or = false): void
     {
         if (is_callable($sql)) {
             $query = new static();
-            $sql = $sql($query->toSql()->select(1));
+            $sql = $sql($query->toSql()->table($this->table)->select(1));
 
-            if(gettype($sql) != 'string'){
+            if (gettype($sql) != 'string') {
                 throw new \Exception('must be string');
             }
 
             $this->bindings = array_merge($this->bindings, $query->bindings);
         } else {
-            if($not){
+            if ($not) {
                 $sql = "NOT ($sql)";
             }
-            if(!$or){
+            if (!$or) {
                 $this->andWheres[] = $sql;
             } else {
                 $this->orWheres[] = $sql;
@@ -249,11 +418,11 @@ class MysqlQueryBuilder
 
         $sql = "EXISTS ($sql)";
 
-        if($not){
+        if ($not) {
             $sql = "NOT $sql";
         }
 
-        if(!$or){
+        if (!$or) {
             $this->andWheres[] = $sql;
         } else {
             $this->orWheres[] = $sql;
@@ -266,80 +435,8 @@ class MysqlQueryBuilder
         return $this;
     }
 
-    public function buildSql(): string
-    {
-        $sql = [];
-
-        switch ($this->action) {
-            case 'select':
-                $sql = $this->buildSelect();
-                break;
-            case 'insert':
-                $sql = $this->buildInsert();
-                break;
-            case 'update':
-                $sql = $this->buildUpdate();
-                break;
-            case 'delete':
-                break;
-            default:
-                break;
-        }
-        return implode(' ', $sql);
-    }
 
 
-    /**
-     * SELECT Methods
-     * ----------
-     */
-
-    public function get(): false|array|string
-    {
-        $sql = $this->setAction('select')->buildSql();
-
-        if ($this->toSqlStatus) {
-            return $sql;
-        }
-
-        $stmt = $this->connection->prepare($sql);
-        $this->bind($stmt);
-        $stmt->execute();
-        return $stmt->fetchAll(PDO::FETCH_ASSOC);
-    }
-
-    public function first()
-    {
-        $this->limit(1);
-        $sql = $this->setAction('select')->buildSql();
-
-        if ($this->toSqlStatus) {
-            return $sql;
-        }
-
-        $stmt = $this->connection->prepare($sql);
-        $this->bind($stmt);
-        $stmt->execute();
-        return $stmt->fetch(PDO::FETCH_ASSOC);
-    }
-
-    public function all(): false|array
-    {
-        $stmt = $this->connection->query("SELECT * FROM {$this->table}");
-        return $stmt->fetchAll(PDO::FETCH_ASSOC);
-    }
-
-    public function count()
-    {
-        $sql = "SELECT COUNT(*) AS count FROM {$this->table}";
-        if ($this->andWheres) {
-            $sql .= " WHERE ".implode(' AND ', $this->andWheres);
-        }
-        $stmt = $this->connection->prepare($sql);
-        $this->bind($stmt);
-        $stmt->execute();
-        return $stmt->fetch(PDO::FETCH_ASSOC)['count'];
-    }
 
     public function select($columns = ['*']): static
     {
@@ -410,6 +507,70 @@ class MysqlQueryBuilder
 
 
     /**
+     * Fetch Methods
+     * ------------
+     */
+
+    public function get(): false|array|string
+    {
+        $sql = $this->setAction('select')->buildSql();
+
+        if ($this->toSqlStatus) {
+            return $sql;
+        }
+
+        $stmt = $this->connection->prepare($sql);
+        $this->bind($stmt);
+        $stmt->execute();
+        return $stmt->fetchAll(PDO::FETCH_ASSOC);
+    }
+
+    public function first()
+    {
+        $this->limit(1);
+        $sql = $this->setAction('select')->buildSql();
+
+        if ($this->toSqlStatus) {
+            return $sql;
+        }
+
+        $stmt = $this->connection->prepare($sql);
+        $this->bind($stmt);
+        $stmt->execute();
+        return $stmt->fetch(PDO::FETCH_ASSOC);
+    }
+
+    public function all(): false|array
+    {
+        $sql = $this->setAction('select')
+            ->buildSql();
+
+        if ($this->toSqlStatus) {
+            return $sql;
+        }
+
+        $stmt = $this->connection->query($sql);
+        return $stmt->fetchAll(PDO::FETCH_ASSOC);
+    }
+
+    public function count()
+    {
+        $sql = $this->setAction('select')
+            ->select(['COUNT(*) AS count'])
+            ->buildSql();
+
+        if ($this->toSqlStatus) {
+            return $sql;
+        }
+
+        $stmt = $this->connection->prepare($sql);
+        $this->bind($stmt);
+        $stmt->execute();
+        return $stmt->fetch(PDO::FETCH_ASSOC)['count'];
+    }
+
+
+    /**
      * Insert Methods
      * ----------
      */
@@ -461,7 +622,7 @@ class MysqlQueryBuilder
 
     private function buildInsertColumns(array $valueSet): string
     {
-        return "(".implode(',', array_keys($valueSet)).")";
+        return "( ".implode(',', array_keys($valueSet))." )";
     }
 
     private function buildInsertValues($i, $valueSet): string
@@ -587,8 +748,11 @@ class MysqlQueryBuilder
             $sql[] = $this->buildJoin();
         }
         $sql[] = $this->buildSet();
-        $sql[] = $this->buildWhereClause(false);
-        $sql[] = $this->buildLimit()[0];
+        $sql[] = $this->buildWhereClause();
+        $limit = $this->buildLimit();
+        if (!empty($limit)) {
+            $sql[] = $limit[0];
+        }
 
         return $sql;
     }
@@ -599,6 +763,28 @@ class MysqlQueryBuilder
      * ============
      * only used in this class
      */
+
+    private function buildSql(): string
+    {
+        $sql = [];
+
+        switch ($this->action) {
+            case 'select':
+                $sql = $this->buildSelect();
+                break;
+            case 'insert':
+                $sql = $this->buildInsert();
+                break;
+            case 'update':
+                $sql = $this->buildUpdate();
+                break;
+            case 'delete':
+                break;
+            default:
+                break;
+        }
+        return implode(' ', $sql);
+    }
 
     private function setAction(string $action): static
     {
@@ -666,5 +852,25 @@ class MysqlQueryBuilder
     {
         return bin2hex(random_bytes(5));
 //        return generateUUID("_");
+    }
+
+    private function getOperator(?string $operator = '='): string
+    {
+        if (is_null($operator)) {
+            return false;
+        }
+
+        return match (strtolower($operator)) {
+            '=', 'eq' => '=',
+            '<>', 'neq' => '!=',
+            '>', 'gt' => '>',
+            '>=', 'gt-eq' => '>=',
+            '<', 'lt' => '<',
+            '<=', 'lt-eq' => '<=',
+            'like' => 'LIKE',
+            'is' => 'IS',
+            'is not' => 'IS NOT',
+            default => false
+        };
     }
 }
