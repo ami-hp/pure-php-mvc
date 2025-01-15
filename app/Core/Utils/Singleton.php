@@ -1,8 +1,6 @@
 <?php
 
-namespace App\Core;
-
-use App\Core\Base;
+namespace app\Core\Utils;
 
 trait Singleton
 {

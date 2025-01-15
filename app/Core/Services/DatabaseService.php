@@ -3,23 +3,34 @@
 namespace App\Core\Services;
 
 use App\Core\Interfaces\QueryBuilderInterface;
-use App\Core\MysqlQueryBuilder;
+use app\Core\QueryBuilders\MysqlQueryBuilder;
 
 class DatabaseService
 {
     protected QueryBuilderInterface $queryBuilder;
 
-    public function __construct(string $database = 'mysql')
+    public function __construct(protected ?string $connection = 'mysql')
     {
-        if ($database === 'mysql') {
-            $this->queryBuilder = new MySqlQueryBuilder();
-        } elseif ($database === 'postgresql') {
-//            $this->queryBuilder = new PostgresqlQueryBuilder();
-        }
+        $this->setConnection();
+    }
+
+    public function connection(string $type): self
+    {
+        $this->connection = $type;
+        $this->setConnection();
+        return $this;
     }
 
     public function __call($method, $args)
     {
         return $this->queryBuilder->$method(...$args);
+    }
+
+    private function setConnection(): void
+    {
+        $this->queryBuilder = match ($this->connection) {
+            default => new MySqlQueryBuilder(),
+            'postgresql' => new \stdClass() // todo postgresql
+        };
     }
 }

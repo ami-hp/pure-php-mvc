@@ -59,21 +59,12 @@ use App\Core\Services\DatabaseService;
 class DB
 {
     protected static ?DatabaseService $instance = null;
-    protected static ?string $connection = null;
     public static function getInstance(): DatabaseService
     {
         if (!static::$instance) {
-            $database = static::$connection ?? config('database.database');
+            $database = config('database.database');
             static::$instance = new DatabaseService($database);
         }
-        return static::$instance;
-    }
-
-    //todo needs to be dynamic
-    public static function connection($database): DatabaseService
-    {
-        static::$connection = $database;
-        static::$instance = new DatabaseService($database);
         return static::$instance;
     }
 

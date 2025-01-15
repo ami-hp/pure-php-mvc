@@ -2,6 +2,8 @@
 
 namespace App\Core;
 
+use app\Core\Utils\Singleton;
+
 class View
 {
     use Singleton;

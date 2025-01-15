@@ -1,7 +1,8 @@
 <?php
 
-namespace App\Core;
+namespace app\Core\QueryBuilders;
 
+use app\Core\Connections\Mysql;
 use App\Core\Interfaces\QueryBuilderInterface;
 use PDO;
 use PDOException;

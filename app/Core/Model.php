@@ -3,8 +3,6 @@
 namespace App\Core;
 
 use App\Core\Facades\DB;
-use App\Core\Mysql;
-use PDO;
 
 class Model
 {

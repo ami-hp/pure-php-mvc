@@ -1,14 +1,14 @@
 <?php
 
-namespace App\Core;
+namespace app\Core\Connections;
 
 class Mysql extends \PDO
 {
-    use \App\Core\Singleton;
+    use \app\Core\Utils\Singleton;
 
     public function __construct()
     {
-        $config = require __DIR__.'/../../config/database.php';
+        $config = require __DIR__.'/../../../config/database.php';
         $mysql = $config['mysql'];
 
         $aDriverOptions[\PDO::MYSQL_ATTR_INIT_COMMAND] = 'SET NAMES UTF8';
