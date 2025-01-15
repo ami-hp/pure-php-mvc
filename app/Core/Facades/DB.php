@@ -5,7 +5,8 @@ namespace App\Core\Facades;
 use App\Core\Services\DatabaseService;
 
 /**
- * @method table(string $name)
+ * @method static connection(string $database)
+ * @method static table(string $name)
  * @method toSql()
  * -------------------
  * @method select()
@@ -55,6 +56,8 @@ use App\Core\Services\DatabaseService;
  * @method insert()
  * --------------------------
  * @method update()
+ * -------------------------
+ * @method delete()
  */
 class DB
 {

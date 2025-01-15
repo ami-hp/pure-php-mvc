@@ -59,6 +59,52 @@ class MysqlQueryBuilder implements QueryBuilderInterface
         return $this;
     }
 
+    public function toSql(bool $state = true): static
+    {
+        $this->toSqlStatus = $state;
+        return $this;
+    }
+
+    public function select($columns = ['*']): static
+    {
+        $this->selects = is_array($columns) ? $columns : func_get_args();
+        return $this;
+    }
+
+    public function unique($column): static
+    {
+        $this->selects = ["DISTINCT {$column}"];
+        return $this;
+    }
+
+    private function buildSelect(): array
+    {
+        return array_merge(
+            $this->buildSelectBase(),
+            [$this->buildWhereClause()],
+            $this->buildGroupBy(),
+            $this->buildOrderBy(),
+            $this->buildLimit(),
+            $this->buildOffset()
+        );
+    }
+
+    private function buildSelectBase(): array
+    {
+        $sql = ["SELECT"];
+        if ($this->distinct) {
+            $sql[] = "DISTINCT";
+        }
+        $sql[] = empty($this->selects) ? "*" : implode(', ', $this->selects);
+        $sql[] = "FROM {$this->table}";
+        return $sql;
+    }
+
+    /**
+     * Where Clause and conditions
+     * ------------------------
+     */
+
     public function where(string|callable $column, string $operator = null, $value = null): static
     {
         $this->processWhere($column, $operator, $value);
@@ -430,21 +476,6 @@ class MysqlQueryBuilder implements QueryBuilderInterface
         }
     }
 
-    public function toSql(bool $state = true): static
-    {
-        $this->toSqlStatus = $state;
-        return $this;
-    }
-
-
-
-
-    public function select($columns = ['*']): static
-    {
-        $this->selects = is_array($columns) ? $columns : func_get_args();
-        return $this;
-    }
-
     public function groupBy($columns): static
     {
         $this->groupBys = is_array($columns) ? $columns : explode(', ', $columns);
@@ -467,35 +498,6 @@ class MysqlQueryBuilder implements QueryBuilderInterface
     {
         $this->offset = $offset;
         return $this;
-    }
-
-    public function unique($column): static
-    {
-        $this->selects = ["DISTINCT {$column}"];
-        return $this;
-    }
-
-    private function buildSelect(): array
-    {
-        return array_merge(
-            $this->buildSelectBase(),
-            [$this->buildWhereClause()],
-            $this->buildGroupBy(),
-            $this->buildOrderBy(),
-            $this->buildLimit(),
-            $this->buildOffset()
-        );
-    }
-
-    private function buildSelectBase(): array
-    {
-        $sql = ["SELECT"];
-        if ($this->distinct) {
-            $sql[] = "DISTINCT";
-        }
-        $sql[] = empty($this->selects) ? "*" : implode(', ', $this->selects);
-        $sql[] = "FROM {$this->table}";
-        return $sql;
     }
 
     private function buildGroupBy(): array
@@ -676,7 +678,7 @@ class MysqlQueryBuilder implements QueryBuilderInterface
      * ----------------
      */
 
-    public function update(array $dataArrays)
+    public function update(array $dataArrays) : bool|string
     {
         $this->addUpdateArray($dataArrays);
         $sql = $this->setAction('update')->buildSql();
@@ -760,6 +762,54 @@ class MysqlQueryBuilder implements QueryBuilderInterface
 
 
     /**
+     * DELETE METHODS
+     * ---------------
+     */
+
+    public function delete(): bool|string
+    {
+
+        $sql = $this->setAction('delete')->buildSql();
+
+        if ($this->toSqlStatus) {
+            return $sql;
+        }
+
+        $stmt = $this->connection->prepare($sql);
+
+        $this->bind($stmt);
+
+        try {
+            $stmt->execute();
+            return true;
+        } catch (PDOException $e) {
+            vamp("Error: ".$e->getMessage());
+            return false;
+        }
+    }
+
+    private function buildDelete(): array
+    {
+        $sql = [];
+        $sql[] = $this->buildDeleteBase();
+        if (!empty($this->join)) {
+            $sql[] = $this->buildJoin();
+        }
+        $sql[] = $this->buildWhereClause();
+        $limit = $this->buildLimit();
+        if (!empty($limit)) {
+            $sql[] = $limit[0];
+        }
+        return $sql;
+    }
+
+    private function buildDeleteBase(): string
+    {
+        return "DELETE FROM {$this->table}";
+    }
+
+
+    /**
      * PRIVATE METHODS
      * ============
      * only used in this class
@@ -780,6 +830,7 @@ class MysqlQueryBuilder implements QueryBuilderInterface
                 $sql = $this->buildUpdate();
                 break;
             case 'delete':
+                $sql = $this->buildDelete();
                 break;
             default:
                 break;
@@ -828,7 +879,7 @@ class MysqlQueryBuilder implements QueryBuilderInterface
     private function buildLimit(): array
     {
         if ($this->limit) {
-            return ["LIMIT {$this->limit}"];
+            return ["LIMIT {$this->limit}"]; //todo refactor
         }
         return [];
     }
